@@ -1,0 +1,19 @@
+# Credenciais — nunca versionar
+.env
+
+# Downloads e logs gerados em runtime
+downloads/
+messages.log
+daily.log
+
+# XLS soltos na raiz
+*.xls
+*.xlsx
+~$*
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
