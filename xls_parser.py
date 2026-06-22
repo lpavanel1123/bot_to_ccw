@@ -67,6 +67,72 @@ def latest_estimated_delivery(file_path: str) -> Optional[datetime]:
     return max(dates) if dates else None
 
 
+def parse_order_lines(file_path: str) -> dict:
+    """
+    Parse every product line from the CCW XLS and return per-line lead time data.
+
+    Returns:
+        {
+            "lines": [{"part_number", "qty", "estimated_delivery", "lead_time_days"}],
+            "max_estimated_delivery": "YYYY-MM-DD" | None,
+        }
+    Lead time is calculated as (estimated_delivery - today).days, clamped to >= 0.
+    """
+    from datetime import date as _date
+    today = _date.today()
+
+    path = Path(file_path)
+    wb   = openpyxl.load_workbook(BytesIO(path.read_bytes()), data_only=True)
+    ws   = wb.active
+
+    header_row = _find_header_row(ws)
+    if header_row is None:
+        return {"lines": [], "max_estimated_delivery": None}
+
+    col_delivery = _find_col(ws, header_row, "Estimated Delivery Date")
+    if col_delivery is None:
+        return {"lines": [], "max_estimated_delivery": None}
+
+    # Find Part Number and Qty columns by loose header match
+    col_part = col_qty = None
+    for cell in ws[header_row]:
+        val = str(cell.value or "").strip().lower()
+        if col_part is None and ("part" in val or "product" in val):
+            col_part = cell.column_letter
+        if col_qty is None and "qty" in val:
+            col_qty = cell.column_letter
+
+    lines    = []
+    max_date = None
+
+    for row in ws.iter_rows(min_row=header_row + 1, values_only=False):
+        row_idx      = row[0].row
+        delivery_val = ws[f"{col_delivery}{row_idx}"].value
+        parsed       = _parse_date(delivery_val)
+        if not parsed:
+            continue
+
+        part = str(ws[f"{col_part}{row_idx}"].value or "").strip() if col_part else ""
+        qty  = str(ws[f"{col_qty}{row_idx}"].value  or "").strip() if col_qty  else ""
+
+        lead_days = max((parsed.date() - today).days, 0)
+
+        if max_date is None or parsed > max_date:
+            max_date = parsed
+
+        lines.append({
+            "part_number":        part,
+            "qty":                qty,
+            "estimated_delivery": parsed.strftime("%Y-%m-%d"),
+            "lead_time_days":     lead_days,
+        })
+
+    return {
+        "lines":                  lines,
+        "max_estimated_delivery": max_date.strftime("%Y-%m-%d") if max_date else None,
+    }
+
+
 if __name__ == "__main__":
     import sys
     path = sys.argv[1] if len(sys.argv) > 1 else "order_119659099.xls"
