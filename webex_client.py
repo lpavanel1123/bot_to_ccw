@@ -10,6 +10,7 @@ logger = logging.getLogger(__name__)
 
 def send_direct_message(person_email: str, text: str, token: str = WEBEX_BOT_TOKEN) -> dict:
     """Envia DM direta. Usa token pessoal para ccwbot (recebe card), bot token para outros."""
+    logger.info(f"      POST /messages -> toPersonEmail={person_email}")
     resp = requests.post(
         f"{WEBEX_API_BASE}/messages",
         headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
@@ -17,21 +18,30 @@ def send_direct_message(person_email: str, text: str, token: str = WEBEX_BOT_TOK
     )
     resp.raise_for_status()
     data = resp.json()
+    logger.info(f"      HTTP 200 | msg_id={data['id'][:24]}... | room_id={data['roomId'][:24]}...")
     return {"msg_id": data["id"], "room_id": data["roomId"]}
 
 
-def poll_room(room_id: str, after_id: str, timeout: int = RESPONSE_TIMEOUT, token: str = WEBEX_BOT_TOKEN) -> list:
+def poll_room(room_id: str, after_id: str, timeout: int = RESPONSE_TIMEOUT,
+              token: str = WEBEX_BOT_TOKEN) -> list:
     """
     Aguarda mensagens novas a partir de after_id.
     Para assim que encontra arquivo ou timeout esgotar.
-    Retorna lista em ordem cronológica.
+    Retorna lista em ordem cronologica.
     """
-    deadline = time.time() + timeout
-    seen = set()
+    deadline  = time.time() + timeout
+    seen      = set()
     collected = []
+    cycle     = 0
 
     while time.time() < deadline:
         time.sleep(POLLING_INTERVAL)
+        cycle   += 1
+        elapsed  = int(timeout - (deadline - time.time()))
+        remaining = int(deadline - time.time())
+
+        logger.info(f"      [poll {cycle:2d}] {elapsed:3d}s decorridos | {remaining:3d}s restantes | GET /messages...")
+
         resp = requests.get(
             f"{WEBEX_API_BASE}/messages",
             headers={"Authorization": f"Bearer {token}"},
@@ -39,28 +49,40 @@ def poll_room(room_id: str, after_id: str, timeout: int = RESPONSE_TIMEOUT, toke
         )
         resp.raise_for_status()
 
+        items = resp.json().get("items", [])
+        logger.info(f"      [poll {cycle:2d}] {len(items)} item(ns) na sala (filtrando por after_id)")
+
         batch = []
-        for msg in resp.json().get("items", []):
+        for msg in items:
             if msg["id"] == after_id:
                 break
             if msg["id"] not in seen:
                 seen.add(msg["id"])
                 batch.append(msg)
 
+        if not batch:
+            logger.info(f"      [poll {cycle:2d}] Nenhuma mensagem nova ainda — aguardando {POLLING_INTERVAL}s...")
+        else:
+            logger.info(f"      [poll {cycle:2d}] {len(batch)} mensagem(ns) nova(s) encontrada(s)!")
+
         for msg in reversed(batch):
             collected.append(msg)
             if msg.get("files"):
+                logger.info(f"      [poll {cycle:2d}] Arquivo detectado — retornando imediatamente.")
                 return collected
 
+    logger.warning(f"      [poll] Timeout de {timeout}s atingido. {len(collected)} mensagem(ns) coletada(s).")
     return collected
 
 
-def submit_card_action(card_message_id: str, inputs: Optional[dict] = None, token: str = WEBEX_USER_TOKEN) -> dict:
-    """Clica num botão de Adaptive Card usando token pessoal (único com permissão)."""
+def submit_card_action(card_message_id: str, inputs: Optional[dict] = None,
+                        token: str = WEBEX_USER_TOKEN) -> dict:
+    """Clica num botao de Adaptive Card usando token pessoal (unico com permissao)."""
+    logger.info(f"      POST /attachment/actions | messageId={card_message_id[:24]}...")
     payload = {
-        "type": "submit",
+        "type":      "submit",
         "messageId": card_message_id,
-        "inputs": inputs or {},
+        "inputs":    inputs or {},
     }
     resp = requests.post(
         f"{WEBEX_API_BASE}/attachment/actions",
@@ -68,18 +90,26 @@ def submit_card_action(card_message_id: str, inputs: Optional[dict] = None, toke
         json=payload,
     )
     resp.raise_for_status()
-    return resp.json()
+    data = resp.json()
+    logger.info(f"      HTTP {resp.status_code} | action_id={data.get('id','?')[:24]}...")
+    return data
 
 
 def download_file(file_url: str, output_path: str, token: str = WEBEX_USER_TOKEN) -> str:
     """Faz download de arquivo do Webex."""
+    logger.info(f"      GET {file_url[:60]}...")
     resp = requests.get(
         file_url,
         headers={"Authorization": f"Bearer {token}"},
         stream=True,
     )
     resp.raise_for_status()
+
+    total_bytes = 0
     with open(output_path, "wb") as f:
         for chunk in resp.iter_content(chunk_size=8192):
             f.write(chunk)
+            total_bytes += len(chunk)
+
+    logger.info(f"      HTTP {resp.status_code} | {total_bytes / 1024:.1f} KB gravados -> {output_path}")
     return output_path

@@ -1,5 +1,5 @@
 """
-Client for the Portal de Cotações REST API.
+Client for the Portal de Cotacoes REST API.
 Used by run_daily.py to fetch orders and push CCW lead-time results back.
 """
 import os
@@ -22,41 +22,47 @@ _HEADERS = {
 
 def fetch_orders() -> list:
     """
-    Returns all quotes that have an order_id set in the portal.
-    Each item: {quote_id, order_id, subject, last_sync}
+    Retorna todas as cotacoes com order_id cadastrado no portal.
+    Cada item: {quote_id, order_id, subject, last_sync}
     """
     if not PORTAL_API_KEY:
-        raise EnvironmentError("PORTAL_API_KEY não definido no .env")
-    r = requests.get(f"{PORTAL_URL}/api/v1/orders", headers=_HEADERS, timeout=15)
+        raise EnvironmentError("PORTAL_API_KEY nao definido no .env")
+
+    url = f"{PORTAL_URL}/api/v1/orders"
+    logger.info(f"  GET {url}")
+
+    r = requests.get(url, headers=_HEADERS, timeout=15)
+    logger.info(f"  HTTP {r.status_code} | {len(r.content)} bytes")
     r.raise_for_status()
+
     orders = r.json()
-    logger.info(f"Portal retornou {len(orders)} pedido(s) com Order ID.")
+    logger.info(f"  {len(orders)} pedido(s) com Order ID retornado(s).")
     return orders
 
 
 def push_leadtime(quote_id: str, order_id: str, lines: list,
                    max_estimated_delivery: str) -> dict:
     """
-    POST lead-time data back to the portal.
+    POST lead-time data de volta ao portal.
     lines: [{"part_number": str, "estimated_delivery": str, "lead_time_days": int}]
-    Returns portal JSON response.
+    Retorna resposta JSON do portal.
     """
+    url     = f"{PORTAL_URL}/api/v1/leadtime"
     payload = {
         "quote_id":               quote_id,
         "order_id":               order_id,
         "max_estimated_delivery": max_estimated_delivery,
         "lines":                  lines,
     }
-    r = requests.post(
-        f"{PORTAL_URL}/api/v1/leadtime",
-        headers=_HEADERS,
-        json=payload,
-        timeout=15,
-    )
+
+    logger.info(f"  POST {url}")
+    logger.info(f"  Payload: quote_id={quote_id[:8]}... | order_id={order_id} | {len(lines)} linha(s) | max={max_estimated_delivery}")
+
+    r = requests.post(url, headers=_HEADERS, json=payload, timeout=15)
+    logger.info(f"  HTTP {r.status_code} | {len(r.content)} bytes")
     r.raise_for_status()
+
     resp = r.json()
-    logger.info(
-        f"Portal atualizado: {resp.get('products_updated', 0)} produto(s) | "
-        f"max_delivery={resp.get('max_estimated_delivery', '')}"
-    )
+    n_upd = resp.get("products_updated", 0)
+    logger.info(f"  Portal confirmou: {n_upd} produto(s) com lead_time atualizado.")
     return resp
