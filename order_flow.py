@@ -89,34 +89,52 @@ def _find_card(messages: list) -> Optional[dict]:
 
 
 def _check_token() -> str:
-    """Retorna um WEBEX_USER_TOKEN valido, renovando automaticamente se necessario."""
+    """Retorna um WEBEX_USER_TOKEN valido, renovando automaticamente se houver refresh token."""
     logger.info(f"      Verificando token pessoal Webex...")
     r = requests.get(
         "https://webexapis.com/v1/people/me",
         headers={"Authorization": f"Bearer {WEBEX_USER_TOKEN}"},
     )
     if r.status_code == 200:
-        data = r.json()
+        data  = r.json()
         name  = data.get("displayName", "?")
         email = data.get("emails", ["?"])[0]
         logger.info(f"      OK | Autenticado como: {name} ({email})")
         return WEBEX_USER_TOKEN
 
-    logger.warning(f"      Token expirado (HTTP {r.status_code}) — renovando automaticamente...")
-    import subprocess
-    result = subprocess.run(
-        ["python3", str(Path(__file__).parent / "renew_token.py")],
-        text=True,
-    )
-    if result.returncode != 0:
-        raise EnvironmentError("Falha ao renovar token. Execute manualmente: python renew_token.py")
+    logger.warning(f"      Token expirado ou invalido (HTTP {r.status_code}).")
 
+    # Tenta renovacao automatica somente se WEBEX_REFRESH_TOKEN estiver configurado
     from dotenv import dotenv_values
-    fresh = dotenv_values(Path(__file__).parent / ".env").get("WEBEX_USER_TOKEN", "")
-    if not fresh:
-        raise EnvironmentError("WEBEX_USER_TOKEN nao encontrado no .env apos renovacao.")
-    logger.info("      Token renovado com sucesso.")
-    return fresh
+    env_vals = dotenv_values(Path(__file__).parent / ".env")
+    if env_vals.get("WEBEX_REFRESH_TOKEN", "").strip():
+        logger.info(f"      WEBEX_REFRESH_TOKEN encontrado — renovando automaticamente...")
+        import subprocess
+        result = subprocess.run(
+            [sys.executable, str(Path(__file__).parent / "renew_token.py")],
+            text=True, capture_output=True,
+        )
+        if result.stdout:
+            logger.info(f"      {result.stdout.strip()}")
+        if result.returncode != 0:
+            if result.stderr:
+                logger.error(f"      {result.stderr.strip()}")
+            raise EnvironmentError("Falha na renovacao automatica do token.")
+        fresh = dotenv_values(Path(__file__).parent / ".env").get("WEBEX_USER_TOKEN", "")
+        if not fresh:
+            raise EnvironmentError("WEBEX_USER_TOKEN nao encontrado no .env apos renovacao.")
+        logger.info("      Token renovado com sucesso.")
+        return fresh
+
+    raise EnvironmentError(
+        "WEBEX_USER_TOKEN expirado e sem WEBEX_REFRESH_TOKEN para renovacao automatica.\n"
+        "      Passos:\n"
+        "        1. Acesse https://developer.webex.com\n"
+        "        2. Clique no seu avatar -> 'Copy personal access token'\n"
+        "        3. Execute: .\\venv\\Scripts\\python.exe renew_token.py\n"
+        "        4. Cole o token quando solicitado\n"
+        "        5. Rode run_daily.py novamente"
+    )
 
 
 def run(order_number: str, output_path: Optional[str] = None) -> Optional[str]:

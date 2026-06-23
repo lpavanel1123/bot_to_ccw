@@ -1,0 +1,35 @@
+{
+  "runs": [
+    {
+      "started_at": "2026-06-23T14:10:48",
+      "ended_at": "2026-06-23T14:18:16",
+      "total_seconds": 448,
+      "total_orders": 2,
+      "success": 1,
+      "failures": 1,
+      "avg_seconds_per_order": 224.0,
+      "orders": [
+        {
+          "order_id": "119659099",
+          "quote_id": "e48ca9d2a14e",
+          "subject": "NTT 26614 - Atualização Tecnológica Camada Core",
+          "status": "erro",
+          "seconds": 277,
+          "products_updated": 0,
+          "max_delivery": null,
+          "message": "sem arquivo XLS"
+        },
+        {
+          "order_id": "11001504302",
+          "quote_id": "4d9d63a8b291",
+          "subject": "NTT 26786",
+          "status": "ok",
+          "seconds": 169,
+          "products_updated": 0,
+          "max_delivery": "2026-12-03"
+        }
+      ]
+    }
+  ],
+  "last_updated": "2026-06-23T14:18:16"
+}

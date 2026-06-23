@@ -23,7 +23,7 @@ from pathlib import Path
 
 import requests
 
-REDIRECT_URI = "http://localhost:8080/callback"
+REDIRECT_URI = "http://localhost:8081/callback"
 # Scopes da integração criada — deve bater exatamente com o que foi configurado no portal
 SCOPES = "spark:kms spark-admin:messages_read spark:messages_write spark:messages_read spark-compliance:messages_read"
 ENV_FILE = Path(__file__).parent / ".env"
@@ -63,7 +63,7 @@ def _capture_code(timeout: int = 120) -> str:
         def log_message(self, *args):
             pass
 
-    server = http.server.HTTPServer(("localhost", 8080), Handler)
+    server = http.server.HTTPServer(("localhost", 8081), Handler)
     server.timeout = timeout
 
     deadline = time.time() + timeout

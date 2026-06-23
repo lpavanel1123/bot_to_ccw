@@ -16,9 +16,10 @@ import sys
 import requests
 from pathlib import Path
 
-ENV_FILE = Path(__file__).parent / ".env"
-WEBEX_ME_URL = "https://webexapis.com/v1/people/me"
-TOKEN_URL = "https://webexapis.com/v1/access_token"
+ENV_FILE        = Path(__file__).parent / ".env"
+TOKEN_INFO_FILE = Path(__file__).parent / "token_info.json"
+WEBEX_ME_URL    = "https://webexapis.com/v1/people/me"
+TOKEN_URL       = "https://webexapis.com/v1/access_token"
 
 
 def _read_env() -> str:
@@ -51,7 +52,10 @@ def _validate_token(token: str):
 
 def _refresh_via_oauth(env_text: str) -> str:
     """Usa refresh_token para obter novo access_token. Retorna novo env_text ou lança exceção."""
-    client_id = _get_env_value(env_text, "WEBEX_CLIENT_ID")
+    import json
+    from datetime import datetime, timezone, timedelta
+
+    client_id     = _get_env_value(env_text, "WEBEX_CLIENT_ID")
     client_secret = _get_env_value(env_text, "WEBEX_CLIENT_SECRET")
     refresh_token = _get_env_value(env_text, "WEBEX_REFRESH_TOKEN")
 
@@ -72,6 +76,18 @@ def _refresh_via_oauth(env_text: str) -> str:
 
     env_text = _update_env(env_text, "WEBEX_USER_TOKEN", tokens["access_token"])
     env_text = _update_env(env_text, "WEBEX_REFRESH_TOKEN", tokens["refresh_token"])
+
+    # Grava metadados de expiração para o painel de observabilidade
+    expires_in = tokens.get("expires_in", 1209600)
+    now        = datetime.now(timezone.utc)
+    info = {
+        "refreshed_at":  now.isoformat(),
+        "expires_in":    expires_in,
+        "expires_at":    (now + timedelta(seconds=expires_in)).isoformat(),
+        "refresh_expires_in": tokens.get("refresh_token_expires_in"),
+    }
+    TOKEN_INFO_FILE.write_text(json.dumps(info, indent=2), encoding="utf-8")
+
     return env_text
 
 

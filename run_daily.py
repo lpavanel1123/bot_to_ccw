@@ -8,14 +8,19 @@ Fluxo:
   3. parse_order_lines(xls) -> extrai lead time por linha de produto
   4. POST /api/v1/leadtime -> atualiza produtos + deals no portal
 """
+import json
 import logging
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 import order_flow
 import portal_client
 from xls_parser import parse_order_lines
+
+METRICS_FILE = Path(__file__).parent / "metrics.json"
+MAX_RUNS_KEPT = 30
 
 _LOG_FILE = Path(__file__).parent / "daily.log"
 
@@ -58,9 +63,24 @@ def _err(msg: str) -> None:
     logger.error(f"  [XX] {msg}")
 
 
+def _write_metrics(run_record: dict) -> None:
+    existing = {"runs": []}
+    if METRICS_FILE.exists():
+        try:
+            existing = json.loads(METRICS_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    runs = existing.get("runs", [])
+    runs.append(run_record)
+    existing["runs"]         = runs[-MAX_RUNS_KEPT:]
+    existing["last_updated"] = run_record["ended_at"]
+    METRICS_FILE.write_text(json.dumps(existing, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
 def main():
-    now_utc = datetime.now(timezone.utc)
-    now_loc = datetime.now()
+    run_start = time.time()
+    now_utc   = datetime.now(timezone.utc)
+    now_loc   = datetime.now()
 
     _banner("BOT CCW — RUN DIARIO")
     logger.info(f"  Data/hora : {now_loc.strftime('%Y-%m-%d %H:%M:%S')} (local)")
@@ -89,11 +109,13 @@ def main():
         logger.info(f"    {i:2d}. order={o['order_id']:<15} quote={o['quote_id'][:8]}... | \"{o.get('subject','')[:40]}\"{last}")
 
     # ── Loop por pedido ────────────────────────────────────────────────────────
-    results = {}
+    results    = {}
+    order_recs = []
     for idx, item in enumerate(orders, 1):
-        quote_id = item["quote_id"]
-        order_id = item["order_id"]
-        subject  = item.get("subject", "")[:50]
+        quote_id   = item["quote_id"]
+        order_id   = item["order_id"]
+        subject    = item.get("subject", "")[:50]
+        order_t0   = time.time()
 
         logger.info("")
         logger.info("=" * _W)
@@ -101,19 +123,30 @@ def main():
         logger.info(f"  Cotacao : {quote_id[:8]}... | \"{subject}\"")
         logger.info("=" * _W)
 
+        order_rec = {
+            "order_id": order_id, "quote_id": quote_id, "subject": subject,
+            "status": "erro", "seconds": 0, "products_updated": 0, "max_delivery": None,
+        }
+
         # ── PASSO 2: Consultar ccwbot ──────────────────────────────────────────
         _section(f"PASSO 2/4 | Consultando ccwbot no Webex (order={order_id})")
         try:
             xls_path = order_flow.run(order_number=order_id)
         except Exception as e:
             _err(f"order_flow.run falhou: {e}")
-            results[order_id] = f"ERRO ccwbot: {e}"
+            results[order_id]     = f"ERRO ccwbot: {e}"
+            order_rec["seconds"]  = round(time.time() - order_t0)
+            order_rec["message"]  = f"ERRO ccwbot: {str(e)[:80]}"
+            order_recs.append(order_rec)
             continue
 
         if not xls_path:
             _warn(f"Nenhum arquivo XLS retornado para order={order_id}.")
             _warn("Verifique o arquivo messages.log para detalhes da sessao Webex.")
-            results[order_id] = "sem arquivo XLS"
+            results[order_id]     = "sem arquivo XLS"
+            order_rec["seconds"]  = round(time.time() - order_t0)
+            order_rec["message"]  = "sem arquivo XLS"
+            order_recs.append(order_rec)
             continue
 
         _ok(f"XLS recebido: {xls_path}")
@@ -126,7 +159,10 @@ def main():
             parsed = parse_order_lines(xls_path)
         except Exception as e:
             _err(f"parse_order_lines falhou: {e}")
-            results[order_id] = f"ERRO parse: {e}"
+            results[order_id]     = f"ERRO parse: {e}"
+            order_rec["seconds"]  = round(time.time() - order_t0)
+            order_rec["message"]  = f"ERRO parse: {str(e)[:80]}"
+            order_recs.append(order_rec)
             continue
 
         lines = parsed["lines"]
@@ -134,7 +170,10 @@ def main():
 
         if not lines:
             _warn("Nenhuma linha com Estimated Delivery Date encontrada no XLS.")
-            results[order_id] = "sem linhas no XLS"
+            results[order_id]     = "sem linhas no XLS"
+            order_rec["seconds"]  = round(time.time() - order_t0)
+            order_rec["message"]  = "sem linhas no XLS"
+            order_recs.append(order_rec)
             continue
 
         _ok(f"{len(lines)} linha(s) de produto encontrada(s):")
@@ -155,7 +194,7 @@ def main():
         logger.info(f"  Payload : quote_id={quote_id[:8]}... | order_id={order_id} | {len(lines)} linhas")
 
         try:
-            resp = portal_client.push_leadtime(
+            resp  = portal_client.push_leadtime(
                 quote_id=quote_id,
                 order_id=order_id,
                 lines=lines,
@@ -164,16 +203,25 @@ def main():
             n_upd = resp.get("products_updated", 0)
             _ok(f"{n_upd} produto(s) com lead_time atualizado no portal.")
             _ok(f"last_ccw_sync gravado em deals.json")
-            results[order_id] = f"OK — {n_upd} produto(s) | max_delivery={max_d}"
+            results[order_id]             = f"OK — {n_upd} produto(s) | max_delivery={max_d}"
+            order_rec["status"]           = "ok"
+            order_rec["products_updated"] = n_upd
+            order_rec["max_delivery"]     = max_d
         except Exception as e:
             _err(f"push_leadtime falhou: {e}")
-            results[order_id] = f"ERRO push: {e}"
+            results[order_id]    = f"ERRO push: {e}"
+            order_rec["message"] = f"ERRO push: {str(e)[:80]}"
+
+        order_rec["seconds"] = round(time.time() - order_t0)
+        order_recs.append(order_rec)
 
     # ── Resumo final ───────────────────────────────────────────────────────────
+    total_secs = round(time.time() - run_start)
+    ok_count   = sum(1 for v in results.values() if v.startswith("OK"))
+    err_count  = len(results) - ok_count
+
     logger.info("")
     _banner("RESUMO FINAL")
-    ok_count  = sum(1 for v in results.values() if v.startswith("OK"))
-    err_count = len(results) - ok_count
     logger.info(f"  Total   : {len(results)} pedido(s)")
     logger.info(f"  Sucesso : {ok_count}")
     logger.info(f"  Falhas  : {err_count}")
@@ -184,6 +232,24 @@ def main():
     logger.info("=" * _W)
     logger.info(f"  Log completo: {_LOG_FILE}")
     logger.info("=" * _W)
+
+    # ── Grava métricas ─────────────────────────────────────────────────────────
+    avg_secs = round(total_secs / len(order_recs), 1) if order_recs else 0
+    run_rec  = {
+        "started_at":            now_utc.strftime("%Y-%m-%dT%H:%M:%S"),
+        "ended_at":              datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
+        "total_seconds":         total_secs,
+        "total_orders":          len(order_recs),
+        "success":               ok_count,
+        "failures":              err_count,
+        "avg_seconds_per_order": avg_secs,
+        "orders":                order_recs,
+    }
+    try:
+        _write_metrics(run_rec)
+        _ok(f"metrics.json atualizado ({METRICS_FILE})")
+    except Exception as e:
+        _warn(f"Falha ao gravar metrics.json: {e}")
 
 
 if __name__ == "__main__":
