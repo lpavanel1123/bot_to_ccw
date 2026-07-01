@@ -87,8 +87,26 @@ def _refresh_via_oauth(env_text: str) -> str:
         "refresh_expires_in": tokens.get("refresh_token_expires_in"),
     }
     TOKEN_INFO_FILE.write_text(json.dumps(info, indent=2), encoding="utf-8")
+    _push_token_info_to_portal(info)
 
     return env_text
+
+
+def _push_token_info_to_portal(token_info: dict) -> None:
+    import os
+    portal_url = os.getenv("PORTAL_URL", "")
+    portal_key = os.getenv("PORTAL_API_KEY", "")
+    if not portal_url or not portal_key:
+        return
+    try:
+        requests.post(
+            f"{portal_url.rstrip('/')}/api/v1/bot-status",
+            json={"runs": [], "order_errors": {}, "token_info": token_info},
+            headers={"Authorization": f"Bearer {portal_key}"},
+            timeout=10,
+        )
+    except Exception:
+        pass
 
 
 def main():
